@@ -1,0 +1,32 @@
+services:
+  lnd-regtest:
+    image: lightninglabs/lnd:v0.21.4-beta
+    container_name: lnd-regtest
+    user: "${LOCAL_UID}:${LOCAL_GID}"
+    command:
+      - --lnddir=/lnd
+      - --bitcoin.regtest
+      - --bitcoin.node=bitcoind
+      - --bitcoind.rpchost=bitcoin:18443
+      - --bitcoind.rpcuser=admin1
+      - --bitcoind.rpcpass=123
+      - --bitcoind.zmqpubrawblock=tcp://bitcoin:28332
+      - --bitcoind.zmqpubrawtx=tcp://bitcoin:28333
+      - --noseedbackup
+      - --alias=lnd-regtest
+      - --rpclisten=0.0.0.0:10009
+      - --restlisten=0.0.0.0:8080
+      - --listen=0.0.0.0:9735
+    ports:
+      - "20009:10009"
+      - "28080:8080"
+      - "19735:9735"
+    volumes:
+      - ./lnd-data:/lnd
+    networks:
+      - shared
+
+networks:
+  shared:
+    external: true
+    name: nigiri
