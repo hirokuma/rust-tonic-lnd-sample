@@ -2,6 +2,7 @@ use std::{io::Write, str::FromStr};
 
 use bitcoin::secp256k1;
 use rand::RngCore;
+use sha2::{Digest, Sha256};
 use tonic_lnd::{
     Client, invoicesrpc,
     lnrpc::{self, PaymentFailureReason, invoice::InvoiceState, payment::PaymentStatus},
@@ -85,15 +86,50 @@ async fn main() -> anyhow::Result<()> {
     balance(&mut client).await?;
 
     // invoice作成&受信
+    // let invoice = create_invoice(&mut client, 100, "lnd-tonic-sample test", None).await?;
+    // println!("no preimage: {}", invoice.get_ref().payment_request);
     let mut preimage = [0u8; 32];
     rand::rng().fill_bytes(&mut preimage);
     println!("pre-defined preimage: {}", hex::encode(preimage));
-    let invoice = create_invoice(&mut client, 100, "lnd-tonic-sample test", Some(preimage.to_vec())).await?;
+    let invoice = create_invoice(
+        &mut client,
+        100,
+        "lnd-tonic-sample test",
+        Some(preimage.to_vec()),
+    )
+    .await?;
+
     let invoice = invoice.get_ref();
     println!("\nPayment Request: {}", invoice.payment_request);
     let mut stream = subscribe_single_invoice(&mut client, invoice.r_hash.clone()).await?;
     let stream = stream.get_mut();
-    wait_invoice_streaming(stream).await?;
+    wait_invoice_streaming(stream, false).await?;
+    balance(&mut client).await?;
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    balance(&mut client).await?;
+    println!();
+
+    // Hold invoice作成&受信
+    let mut preimage = [0u8; 32];
+    rand::rng().fill_bytes(&mut preimage);
+    println!("Hodl invoice's preimage: {}", hex::encode(preimage));
+    let payment_hash = Sha256::digest(preimage).to_vec();
+    let invoice = create_hold_invoice(
+        &mut client,
+        100,
+        "lnd-tonic-sample test",
+        payment_hash.clone(),
+    )
+    .await?;
+
+    let invoice = invoice.get_ref();
+    println!("\nPayment Request: {}", invoice.payment_request);
+    let mut stream = subscribe_single_invoice(&mut client, payment_hash).await?;
+    let stream = stream.get_mut();
+    wait_invoice_streaming(stream, true).await?;
+
+    settle_invoice(&mut client, preimage.to_vec()).await?;
+
     balance(&mut client).await?;
     std::thread::sleep(std::time::Duration::from_secs(1));
     balance(&mut client).await?;
@@ -209,11 +245,11 @@ async fn create_invoice(
 ) -> anyhow::Result<Response<lnrpc::AddInvoiceResponse>> {
     // AddInvoice
     // https://lightning.engineering/api-docs/api/lnd/lightning/add-invoice/
-    let preimage: Vec<u8> = preimage.unwrap_or_default();
+    let r_preimage: Vec<u8> = preimage.unwrap_or_default();
     let req = lnrpc::Invoice {
         value: amount_sat,
         memo: memo.to_string(),
-        r_preimage: preimage,
+        r_preimage,
         ..Default::default()
     };
     Ok(client.lightning().add_invoice(req).await?)
@@ -227,7 +263,10 @@ async fn subscribe_single_invoice(
     Ok(client.invoices().subscribe_single_invoice(req).await?)
 }
 
-async fn wait_invoice_streaming(stream: &mut Streaming<lnrpc::Invoice>) -> anyhow::Result<()> {
+async fn wait_invoice_streaming(
+    stream: &mut Streaming<lnrpc::Invoice>,
+    accepted: bool,
+) -> anyhow::Result<()> {
     while let Some(invoice) = stream.message().await? {
         let state = InvoiceState::try_from(invoice.state).unwrap_or_default();
         println!("  state={:?}", state);
@@ -240,9 +279,42 @@ async fn wait_invoice_streaming(stream: &mut Streaming<lnrpc::Invoice>) -> anyho
                 println!("Cancelled");
                 break;
             }
+            InvoiceState::Accepted => {
+                if accepted {
+                    println!("Accepted");
+                    break;
+                }
+            }
             _ => continue,
         }
     }
 
     Ok(())
+}
+
+async fn create_hold_invoice(
+    client: &mut Client,
+    amount_sat: i64,
+    memo: &str,
+    payment_hash: Vec<u8>,
+) -> anyhow::Result<Response<invoicesrpc::AddHoldInvoiceResp>> {
+    // AddHoldInvoice
+    // https://lightning.engineering/api-docs/api/lnd/invoices/add-hold-invoice/
+    let req = invoicesrpc::AddHoldInvoiceRequest {
+        value: amount_sat,
+        memo: memo.to_string(),
+        hash: payment_hash,
+        ..Default::default()
+    };
+    Ok(client.invoices().add_hold_invoice(req).await?)
+}
+
+async fn settle_invoice(
+    client: &mut Client,
+    preimage: Vec<u8>,
+) -> anyhow::Result<Response<invoicesrpc::SettleInvoiceResp>> {
+    // SettleInvoice
+    // https://lightning.engineering/api-docs/api/lnd/invoices/settle-invoice/
+    let req = invoicesrpc::SettleInvoiceMsg { preimage };
+    Ok(client.invoices().settle_invoice(req).await?)
 }
