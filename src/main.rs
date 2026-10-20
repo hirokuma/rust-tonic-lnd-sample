@@ -15,14 +15,14 @@ use tonic_lnd::{
 #[derive(Debug, Parser)]
 #[command(name = "lnd-tonic-sample")]
 struct Args {
-    #[arg(help = "LND gRPC URL, e.g. https://127.0.0.1:20009")]
+    #[arg(help = "LND gRPC URL, e.g. https://127.0.0.1:20009", default_value = "https://127.0.0.1:20009")]
     address: String,
 
-    #[arg(help = "Path to the LND CA certificate")]
-    ca_file: PathBuf,
+    #[arg(help = "Path to the LND CA certificate", default_value = "$PWD/lnd-data/ca.pem")]
+    ca_file: String,
 
-    #[arg(help = "Path to the admin macaroon file")]
-    macaroon_file: PathBuf,
+    #[arg(help = "Path to the admin macaroon file", default_value = "$PWD/lnd-data/data/chain/bitcoin/regtest/admin.macaroon")]
+    macaroon_file: String,
 }
 
 #[tokio::main]
@@ -31,16 +31,16 @@ async fn main() -> Result<()> {
 
     let mut client = Client::builder()
         .address(args.address.clone())
-        .macaroon_path(args.macaroon_file.clone())
-        .cert_path(args.ca_file.clone())
+        .macaroon_path(decode_file_path(&args.macaroon_file))
+        .cert_path(decode_file_path(&args.ca_file))
         .build()
         .await
         .with_context(|| {
             format!(
                 "failed to build LND client for address={} ca_file={} macaroon_file={}",
                 args.address,
-                args.ca_file.display(),
-                args.macaroon_file.display()
+                args.ca_file,
+                args.macaroon_file
             )
         })?;
 
@@ -60,9 +60,15 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let client_payment = client.clone();
+    let _ = tokio::spawn(track_payments(client_payment));
+
     let mut payable = false;
     for channel in &list.get_ref().channels {
-        println!("  chan_id={} ... {} sats", channel.chan_id, channel.local_balance);
+        println!(
+            "  chan_id={} ... {} sats",
+            channel.chan_id, channel.local_balance
+        );
         if channel.local_balance >= dec_invoice.num_satoshis {
             payable = true;
             break;
@@ -162,10 +168,7 @@ async fn get_info(client: &mut Client) -> Result<()> {
     Ok(())
 }
 
-async fn decode_invoice(
-    client: &mut Client,
-    invoice_str: &str,
-) -> Result<Response<lnrpc::PayReq>> {
+async fn decode_invoice(client: &mut Client, invoice_str: &str) -> Result<Response<lnrpc::PayReq>> {
     // DecodePayReq
     // https://lightning.engineering/api-docs/api/lnd/lightning/decode-pay-req/
     let req = lnrpc::PayReqString {
@@ -178,9 +181,7 @@ async fn decode_invoice(
         .context("failed to decode BOLT11 invoice")
 }
 
-async fn list_channels(
-    client: &mut Client,
-) -> Result<Response<lnrpc::ListChannelsResponse>> {
+async fn list_channels(client: &mut Client) -> Result<Response<lnrpc::ListChannelsResponse>> {
     // ListChannels
     // https://lightning.engineering/api-docs/api/lnd/lightning/list-channels/
     let req = lnrpc::ListChannelsRequest {
@@ -200,7 +201,10 @@ async fn balance(client: &mut Client) -> Result<()> {
     let list = list_channels(client).await?;
 
     for channel in &list.get_ref().channels {
-        println!("  chan_id={} ... {} sats", channel.chan_id, channel.local_balance);
+        println!(
+            "  chan_id={} ... {} sats",
+            channel.chan_id, channel.local_balance
+        );
     }
 
     Ok(())
@@ -211,7 +215,7 @@ async fn send_payment(
     invoice_str: &str,
     fee_limit_sat: i64,
 ) -> Result<Response<Streaming<lnrpc::Payment>>> {
-   // SendPaymentV2
+    // SendPaymentV2
     // https://lightning.engineering/api-docs/api/lnd/router/send-payment-v2/
     let req = routerrpc::SendPaymentRequest {
         payment_request: invoice_str.to_string(),
@@ -233,7 +237,7 @@ async fn wait_payment_streaming(stream: &mut Streaming<lnrpc::Payment>) -> Resul
     while let Some(payment) = tokio::time::timeout_at(deadline, stream.message()).await?? {
         let status = PaymentStatus::try_from(payment.status).unwrap_or_default();
         println!(
-            "  status={:?}, value={} sats, fee={} sats",
+            "  send_payment: status={:?}, value={} sats, fee={} sats",
             status, payment.value_sat, payment.fee_sat
         );
 
@@ -360,4 +364,50 @@ async fn settle_invoice(
         .settle_invoice(req)
         .await
         .context("failed to settle hold invoice")
+}
+
+async fn track_payments(mut client: Client) -> Result<()> {
+    // TrackPayments
+    // https://lightning.engineering/api-docs/api/lnd/router/track-payments/
+    let req = routerrpc::TrackPaymentsRequest {
+        no_inflight_updates: false,
+    };
+
+    let mut stream = client
+        .router()
+        .track_payments(req)
+        .await
+        .context("failed to track payments")?;
+    let stream = stream.get_mut();
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    while let Some(payment) = tokio::time::timeout_at(deadline, stream.message()).await?? {
+        println!("  tracking_payment={:?}", payment);
+    }
+
+    anyhow::bail!("payment stream closed before terminal state");
+}
+
+fn decode_file_path(path_str: &str) -> PathBuf {
+    if let Some(s) = path_str.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            home.join(s)
+        } else {
+            std::path::PathBuf::from(path_str)
+        }
+    } else if let Some(s) = path_str.strip_prefix("$HOME/") {
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            home.join(s)
+        } else {
+            std::path::PathBuf::from(path_str)
+        }
+    } else if let Some(s) = path_str.strip_prefix("$PWD/") {
+        if let Some(home) = std::env::var_os("PWD").map(std::path::PathBuf::from) {
+            home.join(s)
+        } else {
+            std::path::PathBuf::from(path_str)
+        }
+    } else {
+        std::path::PathBuf::from(path_str)
+    }
 }

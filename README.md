@@ -50,7 +50,6 @@ nigiri lnd payinvoice lnbcrt1......
 ## Down
 
 ```shell
-nigiri stop --delete
-docker compose down -v
-rm -rf lnd-data
+nigiri stop
+./clean.sh
 ```
