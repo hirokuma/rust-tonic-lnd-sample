@@ -146,6 +146,8 @@ fn read_invoice_from_stdin() -> Result<String> {
 }
 
 async fn get_info(client: &mut Client) -> Result<()> {
+    // GetInfo
+    // https://lightning.engineering/api-docs/api/lnd/lightning/get-info/
     let info = client
         .lightning()
         .get_info(lnrpc::GetInfoRequest {})
@@ -164,6 +166,8 @@ async fn decode_invoice(
     client: &mut Client,
     invoice_str: &str,
 ) -> Result<Response<lnrpc::PayReq>> {
+    // DecodePayReq
+    // https://lightning.engineering/api-docs/api/lnd/lightning/decode-pay-req/
     let req = lnrpc::PayReqString {
         pay_req: invoice_str.to_string(),
     };
@@ -177,6 +181,8 @@ async fn decode_invoice(
 async fn list_channels(
     client: &mut Client,
 ) -> Result<Response<lnrpc::ListChannelsResponse>> {
+    // ListChannels
+    // https://lightning.engineering/api-docs/api/lnd/lightning/list-channels/
     let req = lnrpc::ListChannelsRequest {
         active_only: true,
         ..Default::default()
@@ -205,6 +211,8 @@ async fn send_payment(
     invoice_str: &str,
     fee_limit_sat: i64,
 ) -> Result<Response<Streaming<lnrpc::Payment>>> {
+   // SendPaymentV2
+    // https://lightning.engineering/api-docs/api/lnd/router/send-payment-v2/
     let req = routerrpc::SendPaymentRequest {
         payment_request: invoice_str.to_string(),
         fee_limit_sat,
@@ -254,6 +262,8 @@ async fn create_invoice(
     memo: &str,
     preimage: Option<Vec<u8>>,
 ) -> Result<Response<lnrpc::AddInvoiceResponse>> {
+    // AddInvoice
+    // https://lightning.engineering/api-docs/api/lnd/lightning/add-invoice/
     let r_preimage = preimage.unwrap_or_default();
     let req = lnrpc::Invoice {
         value: amount_sat,
@@ -273,6 +283,8 @@ async fn subscribe_single_invoice(
     client: &mut Client,
     hash: Vec<u8>,
 ) -> Result<Response<Streaming<lnrpc::Invoice>>> {
+    // SubscribeSingleInvoice
+    // https://lightning.engineering/api-docs/api/lnd/invoices/subscribe-single-invoice/
     let req = invoicesrpc::SubscribeSingleInvoiceRequest { r_hash: hash };
     client
         .invoices()
@@ -319,6 +331,8 @@ async fn create_hold_invoice(
     memo: &str,
     payment_hash: Vec<u8>,
 ) -> Result<Response<invoicesrpc::AddHoldInvoiceResp>> {
+    // AddHoldInvoice
+    // https://lightning.engineering/api-docs/api/lnd/invoices/add-hold-invoice/
     let req = invoicesrpc::AddHoldInvoiceRequest {
         value: amount_sat,
         memo: memo.to_string(),
@@ -337,6 +351,8 @@ async fn settle_invoice(
     client: &mut Client,
     preimage: Vec<u8>,
 ) -> Result<Response<invoicesrpc::SettleInvoiceResp>> {
+    // SettleInvoice
+    // https://lightning.engineering/api-docs/api/lnd/invoices/settle-invoice/
     let req = invoicesrpc::SettleInvoiceMsg { preimage };
 
     client
