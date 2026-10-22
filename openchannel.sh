@@ -16,7 +16,7 @@ echo "nigiri-ln  : $NIGIRI_LN"
 
 PEERS=$(local_lnd listpeers | jq '.peers | length')
 if [ $PEERS -eq 0 ]; then
-    local_lnd connect $LOCAL_LN@lnd-regtest:9735
+    local_lnd connect $NIGIRI_LN@lnd:9735
 fi
 
 CHANS=$(local_lnd listchannels | jq -r '[.channels[] | select(.remote_pubkey=="'$NIGIRI_LN'")] | length')
