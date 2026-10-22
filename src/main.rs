@@ -303,6 +303,7 @@ async fn wait_invoice_streaming(
 ) -> Result<()> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
 
+    // stream.message()は、初回は変化がなくても値を返す。以降は変化があったときだけ返す。
     while let Some(invoice) = tokio::time::timeout_at(deadline, stream.message()).await?? {
         let state = InvoiceState::try_from(invoice.state).unwrap_or_default();
         println!("  state={:?}", state);
